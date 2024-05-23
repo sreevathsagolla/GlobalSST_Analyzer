@@ -4,18 +4,34 @@ import numpy as np
 import argparse
 import pandas as pd
 from mplcursors import cursor
+from argparse import RawTextHelpFormatter
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Interactive plot for mean global SST/SSTA.")
+    parser = argparse.ArgumentParser(description="Interactive plot for mean global SST/SSTA.", formatter_class=RawTextHelpFormatter)
 
 
     parser.add_argument(
         '--data_type',
         type=str,
+        choices = ['SST', 'SSTA'],
         required=True,
-        help="Type of data: SST, SSTA_1 [w.r.t. first 30yr baseline], SSTA_2 [w.r.t. previous year temperatures i.e. SST_y - SST_(y-1)]"
+        help="Type of data to plot: SST or SSTA"
     )
+
+    parser.add_argument(
+        '--anomaly_type',
+        type=str,
+        required=False,
+        choices = ['FIXED_BASELINE', 'PREV_YEAR_SST', 'ADJACENT_YEARS'],
+        help="""Type of anomaly, where SSTA calculated: 
+        - 'FIXED_BASELINE': by providing a fixed baseline (--baseline argument needs to be given)
+        - 'PREV_YEAR_SST' : based on previous year temperatures (i.e. SST_y - SST_(y-1))
+        - 'ADJACENT_YEARS': w.r.t. a baseline calculated using 'n' years on either side 
+                            of a particular year (excluding that particular year itself).
+        """
+    )
+
     parser.add_argument(
         '--obs_name',
         type=str,
@@ -38,59 +54,45 @@ def main():
     parser.add_argument(
         '--baseline',
         type=str,
-        help="Baseline in the format of 'YYYY-YYYY'"
+        help="Baseline in the format of 'YYYY-YYYY"
+    )
+    parser.add_argument(
+        '--window',
+        type=int,
+        help="Number of adjacent years to consider to calculate baseline of each year"
     )
 
     args = parser.parse_args()
 
-    data_type, start_year, end_year, obs_name = args.data_type, args.start_year, args.end_year, args.obs_name
+    start_year, end_year = args.start_year, args.end_year
+    validate_years(start_year, end_year, args.obs_name)
 
-    if data_type == 'SSTA_1':
-        if args.baseline:
-            validate_baseline(args.baseline)
-        else:
-            raise argparse.ArgumentTypeError("baseline invalid or not given, please retry.")
-
-    validate_years(start_year, end_year, obs_name)
-
-    if obs_name == 'HadISST':
+    if args.obs_name == 'HadISST':
         f = 12
         year_range = pd.date_range(start='01-01-2023', end='31-12-2023', freq='MS')
-    elif obs_name == 'NOAA_OISST':
+    elif args.obs_name == 'NOAA_OISST':
         f = 365
         year_range = pd.date_range(start='01-01-2023', end='31-12-2023', freq='D')
 
-
-    df = pd.read_csv('./data/'+obs_name+'_globmean_sst_data.csv')
+    df = pd.read_csv('./data/'+args.obs_name+'_globmean_sst_data.csv')
     df['TIME'] = pd.to_datetime(df['TIME'])
     df = df.set_index('TIME')
     df = df[~((df.index.month == 2) & (df.index.day == 29))]
     df = df[(df.index.year>=start_year) & (df.index.year<=end_year)]
-    
-    if data_type == 'SSTA_1':
-        bs_start, bs_end = [int(x) for x in args.baseline.split('-')]
-        bs_df = df[(df.index.year >= bs_start) & (df.index.year <= bs_end)]
-        climatology = bs_df.groupby([bs_df.index.month, bs_df.index.day]).mean()
-        def get_climatology(row, climatology):
-            month, day = row.name.month, row.name.day
-            return climatology.loc[(month, day)]
-        df['Climatology'] = df.apply(get_climatology, axis=1, climatology=climatology)
-        df['SST'] = df['SST'] - df['Climatology']
-        df.drop(columns='Climatology', inplace=True)
-        dtype_title = 'SSTA (Baseline: '+args.baseline+')'
-    elif data_type == 'SSTA_2':
-        anom = df.copy(deep = True)
-        start_year = start_year + 1
-        for year in range(start_year,end_year+1):
-            anom[anom.index.year == year] = df[df.index.year == year].values - df[df.index.year == (year-1)].values
-        df = anom[(anom.index.year>=start_year) & (anom.index.year<=end_year)]
-        dtype_title = 'SSTA (w.r.t. previous year mean SST)'
-    elif data_type == 'SST':
+
+    if args.data_type == 'SSTA':
+        df,dtype_title = ssta_calculator(anomaly_type = args.anomaly_type, 
+                                         df = df,
+                                         start_year = args.start_year,
+                                         end_year = args.end_year,
+                                         baseline = args.baseline,
+                                         window = args.window)
+    else:
         dtype_title = 'SST'
 
     fig, ax = plt.subplots()
     fig.subplots_adjust(bottom=0.2)
-    ax.set_title(obs_name+' | Mean '+dtype_title+' | World 60S-60N | '+str(start_year)+'-'+str(end_year),
+    ax.set_title(args.obs_name+' | Mean '+dtype_title+' | World 60S-60N | '+str(start_year)+'-'+str(end_year),
                     fontweight='bold',
                     fontsize=16)
     ax.grid(True)
@@ -117,7 +119,6 @@ def main():
                                                                             '1 Oct', '1 Nov', '1 Dec'])
     ax.legend(fancybox=True, shadow=True, ncols=12, bbox_to_anchor=(0.5, -0.25), loc="lower center")
     cursor(hover=True)
-#    ax.set_ylim(19.8,21.2)
 
     leg = interactive_legend()
     return fig, ax, leg
@@ -132,15 +133,49 @@ def validate_years(start_year, end_year, obs_name):
         raise argparse.ArgumentTypeError("end_year must be <= 2023")
     if start_year > end_year:
         raise argparse.ArgumentTypeError("start_year must be less than or equal to end_year")
-    return start_year, end_year
 
-def validate_baseline(baseline):
-    try:
-        start_baseline, end_baseline = map(int, baseline.split('-'))
-        if start_baseline > end_baseline:
-            raise argparse.ArgumentTypeError("Baseline start year must be less than or equal to baseline end year")
-    except ValueError:
-        raise argparse.ArgumentTypeError("Baseline must be in the format 'YYYY-YYYY'")
+def ssta_calculator(anomaly_type, df, start_year, end_year, baseline = None, window = None):
+    if anomaly_type == 'FIXED_BASELINE':
+
+        try:
+            bs_start, bs_end = [int(x) for x in baseline.split('-')]
+            if bs_start > bs_end:
+                raise argparse.ArgumentTypeError("Baseline start year must be less than or equal to baseline end year")
+        except:
+            raise argparse.ArgumentTypeError("Invalid baseline or none given. Baseline must be in the format 'YYYY-YYYY'")
+
+        bs_start, bs_end = [int(x) for x in baseline.split('-')]
+        bs_df = df[(df.index.year >= bs_start) & (df.index.year <= bs_end)]
+        climatology = bs_df.groupby([bs_df.index.month, bs_df.index.day]).mean()
+
+        def get_climatology(row, climatology):
+            month, day = row.name.month, row.name.day
+            return climatology.loc[(month, day)]
+        df['Climatology'] = df.apply(get_climatology, axis=1, climatology=climatology)
+
+        df['SST'] = df['SST'] - df['Climatology']
+        df.drop(columns='Climatology', inplace=True)
+        dtype_title = 'SSTA (Baseline: '+baseline+')'
+    elif anomaly_type == 'PREV_YEAR_SST':
+        anom = df.copy(deep = True)
+        start_year = start_year + 1
+        for year in range(start_year,end_year+1):
+            anom[anom.index.year == year] = df[df.index.year == year].values - df[df.index.year == (year-1)].values
+        df = anom[(anom.index.year>=start_year) & (anom.index.year<=end_year)]
+        dtype_title = 'SSTA (w.r.t. previous year mean SST)'
+    elif anomaly_type == 'ADJACENT_YEARS':
+        if window is None:
+            raise argparse.ArgumentTypeError("Invalid number of years (i.e. window) or none given.")
+        anoms = []
+        for year in range(start_year, end_year+1):
+            bs_df = df[(df.index.year >= year-window) & (df.index.year <= year+window) & (df.index.year != year)]
+            anoms = anoms + [df[df.index.year == year]['SST'] - bs_df.groupby([bs_df.index.month, bs_df.index.day]).mean()['SST'].values]
+        df = pd.concat(anoms).to_frame()
+        dtype_title = 'SSTA (with adjacent {} years as baseline)'.format(window)
+    else:
+        raise argparse.ArgumentTypeError("Invalid anomaly_type selected (or no selection made), please check available options")
+    return df, dtype_title
+
 
 def interactive_legend(ax=None):
     if ax is None:
