@@ -10,7 +10,7 @@ from argparse import RawTextHelpFormatter
 def main():
     parser = argparse.ArgumentParser(description="Interactive plot for mean global SST/SSTA.", formatter_class=RawTextHelpFormatter)
 
-
+    ##### READING IN ARGUMENTS #####
     parser.add_argument(
         '--data_type',
         type=str,
@@ -63,23 +63,27 @@ def main():
     )
 
     args = parser.parse_args()
-
-    start_year, end_year = args.start_year, args.end_year
-    validate_years(start_year, end_year, args.obs_name)
+    validate_years(args.start_year, args.end_year, args.obs_name) # Validating the arguments based on data available
 
     if args.obs_name == 'HadISST':
-        f = 12
+        f = 12 # Time increments in a year; HadISST is available at monthly resolution
         year_range = pd.date_range(start='01-01-2023', end='31-12-2023', freq='MS')
     elif args.obs_name == 'NOAA_OISST':
-        f = 365
+        f = 365 # Time resolution; NOAA_OISST is available at daily resolution
         year_range = pd.date_range(start='01-01-2023', end='31-12-2023', freq='D')
+    '''
+    year_range is basically used as the x-axis (month or day of year) of the interactive plot. '2023' is just arbitrarily 
+    chosen as year here, you can put any non-leap year (will be removing leap days in next step for ease of analysis).
+    '''
 
+    ##### READING IN SST DATA #####
     df = pd.read_csv('./data/'+args.obs_name+'_globmean_sst_data.csv')
-    df['TIME'] = pd.to_datetime(df['TIME'])
-    df = df.set_index('TIME')
-    df = df[~((df.index.month == 2) & (df.index.day == 29))]
-    df = df[(df.index.year>=start_year) & (df.index.year<=end_year)]
+    df['TIME'] = pd.to_datetime(df['TIME']) # Making sure TIME column is in datetime format.
+    df = df.set_index('TIME') # Setting TIME as index.
+    df = df[~((df.index.month == 2) & (df.index.day == 29))] # Removing leap days
+    df = df[(df.index.year>=args.start_year) & (df.index.year<=args.end_year)] # Cropping timeperiod based on start and end year given by user.
 
+    ##### UPDATING df BASED ON data_type SELECTED #####
     if args.data_type == 'SSTA':
         df,dtype_title = ssta_calculator(anomaly_type = args.anomaly_type, 
                                          df = df,
@@ -87,30 +91,36 @@ def main():
                                          end_year = args.end_year,
                                          baseline = args.baseline,
                                          window = args.window)
+        if args.anomaly_type == 'PREV_YEAR_SST':
+            args.start_year += 1
     else:
         dtype_title = 'SST'
+    
+    nyears = args.end_year - args.start_year + 1 
+    # Number of years to reshape df values to (years, f) shape, for calculating mean, mean+2*std & mean-2*std.
 
+    ##### PLOTTING CODE #####
     fig, ax = plt.subplots()
     fig.subplots_adjust(bottom=0.2)
-    ax.set_title(args.obs_name+' | Mean '+dtype_title+' | World 60S-60N | '+str(start_year)+'-'+str(end_year),
+    ax.set_title(args.obs_name+' | Mean '+dtype_title+' | World 60S-60N | '+str(args.start_year)+'-'+str(args.end_year),
                     fontweight='bold',
                     fontsize=16)
     ax.grid(True)
    
     lines = []
-    for i in range(start_year, end_year + 1):
+    for i in range(args.start_year, args.end_year + 1):
         line, = ax.plot(year_range, df.loc[df.index.year == i]['SST'], lw=1.5, label=str(i), alpha=0.3)
         lines = lines + [line]
 
-    line, = ax.plot(year_range, np.array(df['SST']).reshape(end_year-start_year+1, f).mean(axis=0), color='black', lw=1.5,
-                    label='{}-{} Mean'.format(start_year,end_year))
+    line, = ax.plot(year_range, np.array(df['SST']).reshape(nyears, f).mean(axis=0), color='black', lw=1.5,
+                    label='{}-{} Mean'.format(args.start_year,args.end_year))
     lines = lines + [line]
-    line, = ax.plot(year_range, np.array(df['SST']).reshape(end_year-start_year+1, f).mean(axis=0) +
-                    2 * np.array(df['SST']).reshape(end_year-start_year+1, f).std(axis=0),
+    line, = ax.plot(year_range, np.array(df['SST']).reshape(nyears, f).mean(axis=0) +
+                    2 * np.array(df['SST']).reshape(nyears, f).std(axis=0),
                     '--', label='plus 2σ', color='grey', lw=1.5)
     lines = lines + [line]
-    line, = ax.plot(year_range, np.array(df['SST']).reshape(end_year-start_year+1, f).mean(axis=0) -
-                    2 * np.array(df['SST']).reshape(end_year-start_year+1, f).std(axis=0),
+    line, = ax.plot(year_range, np.array(df['SST']).reshape(nyears, f).mean(axis=0) -
+                    2 * np.array(df['SST']).reshape(nyears, f).std(axis=0),
                     '--', label='minus 2σ', color='grey', lw=1.5)
     lines = lines + [line]
 
@@ -144,34 +154,38 @@ def ssta_calculator(anomaly_type, df, start_year, end_year, baseline = None, win
         except:
             raise argparse.ArgumentTypeError("Invalid baseline or none given. Baseline must be in the format 'YYYY-YYYY'")
 
-        bs_start, bs_end = [int(x) for x in baseline.split('-')]
-        bs_df = df[(df.index.year >= bs_start) & (df.index.year <= bs_end)]
-        climatology = bs_df.groupby([bs_df.index.month, bs_df.index.day]).mean()
+        bs_start, bs_end = [int(x) for x in baseline.split('-')] # Baseline start and end year
+        bs_df = df[(df.index.year >= bs_start) & (df.index.year <= bs_end)] # Cropping df to select baseline years only
+        climatology = bs_df.groupby([bs_df.index.month, bs_df.index.day]).mean() # Grouping my month and day to get mean climatology
 
         def get_climatology(row, climatology):
             month, day = row.name.month, row.name.day
             return climatology.loc[(month, day)]
+        
+        # Making a new row climatological value (calculated from baseline) based on 'day (or month) of year' for each row of the timeseries.
         df['Climatology'] = df.apply(get_climatology, axis=1, climatology=climatology)
 
-        df['SST'] = df['SST'] - df['Climatology']
+        df['SST'] = df['SST'] - df['Climatology'] # Calculating anomaly; ignore the column name still being 'SST'
         df.drop(columns='Climatology', inplace=True)
-        dtype_title = 'SSTA (Baseline: '+baseline+')'
+        dtype_title = 'SSTA (Baseline: '+baseline+')' # Updating the figure title accordingly
     elif anomaly_type == 'PREV_YEAR_SST':
         anom = df.copy(deep = True)
-        start_year = start_year + 1
-        for year in range(start_year,end_year+1):
+        start_year = start_year + 1 # start_year being updated by 1; need to fix (or improve?) this later.
+        for year in range(start_year,end_year+1): # Simple SST_{y} - SST_{y-1}
             anom[anom.index.year == year] = df[df.index.year == year].values - df[df.index.year == (year-1)].values
-        df = anom[(anom.index.year>=start_year) & (anom.index.year<=end_year)]
-        dtype_title = 'SSTA (w.r.t. previous year mean SST)'
+        df = anom[(anom.index.year>=start_year) & (anom.index.year<=end_year)] # Cropping to just start_year to end_year
+        dtype_title = 'SSTA (w.r.t. previous year mean SST)' # Updating the figure title accordingly
     elif anomaly_type == 'ADJACENT_YEARS':
         if window is None:
             raise argparse.ArgumentTypeError("Invalid number of years (i.e. window) or none given.")
-        anoms = []
+        anoms = [] # This will be list of pandas Series objects, each series will be anomaly calculated below for each year.
         for year in range(start_year, end_year+1):
+            # Selecting adjacent 'year +/- window' years except for the year itself. This will be our baseline for that particular year.
             bs_df = df[(df.index.year >= year-window) & (df.index.year <= year+window) & (df.index.year != year)]
+            # Calculating mean baseline by grouping the bs_df by 'day (or month) of year' and then calculating anomalies
             anoms = anoms + [df[df.index.year == year]['SST'] - bs_df.groupby([bs_df.index.month, bs_df.index.day]).mean()['SST'].values]
-        df = pd.concat(anoms).to_frame()
-        dtype_title = 'SSTA (with adjacent {} years as baseline)'.format(window)
+        df = pd.concat(anoms).to_frame() # Merging all the individual years' anomalies into a dataframe
+        dtype_title = 'SSTA (with adjacent {} years as baseline)'.format(window) # Updating the figure title accordingly
     else:
         raise argparse.ArgumentTypeError("Invalid anomaly_type selected (or no selection made), please check available options")
     return df, dtype_title
