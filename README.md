@@ -8,6 +8,11 @@ An interactive plotter for daily/monthly mean global Sea Surface Temperature (SS
 - Supports data from HadISST and NOAA_OISST.
 - Flexible anomaly calculations with multiple baseline options.
 
+## Data
+Area-weighted mean sea surface temperature data from:
+- HadISST for 1870-2023 timeperiod at monthly resolution (Bayner et al., 2003)
+- NOAA OISST v2.1  for 1982-2023 timeperiod at daily resolution (Huang et al., 2020)
+
 ## Usage
 To get started, use the following command to see the available options:
 
