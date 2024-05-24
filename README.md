@@ -1,6 +1,6 @@
 
-# MEAN_SST_PLOTTER [BETA]
-An interactive plotter for daily/monthly mean global Sea Surface Temperature (SST). Each year's data is plotted as an individual line, allowing for easy comparison across years.
+# GlobalSST_Analyzer
+An interactive plotting code for daily/monthly mean global sea surface temperature (SST) and SST anomaly. Each year's data is plotted as an individual line, allowing for easy comparison across years. The domain has been cropped to 60˚S-60˚N and 0˚E-360˚E (inspired from ClimateReanalyzer.org SST charts).
 
 ## Features
 - Interactive plotting for mean global SST and SST Anomalies (SSTA).
